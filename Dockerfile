@@ -1,6 +1,7 @@
 # # This first line enables the BuildKit features like cache mounts.
 ARG PYTHON_VERSION=3.11
-ARG BASE_IMAGE=nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+#ARG BASE_IMAGE=nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 ARG LOG_LEVEL=info
 
 # ---- Base Stage ----
@@ -38,6 +39,7 @@ RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 # Create a non-root user and group
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home appuser
+
 
 # volume used for model cache
 VOLUME /home/appuser/.cache
