@@ -1,6 +1,7 @@
 import logging
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, status
 from faster_whisper import WhisperModel
 from . import config
 from .audio_processor import process_audio_chunk
@@ -11,41 +12,54 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Global variable to hold the Whisper model instance
 model: WhisperModel | None = None
 
-app = FastAPI()
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    """
+    Handles application startup and shutdown logic using lifespan context manager.
+    """
+    global model
 
+    try:
+        logging.info("Initializing application...")
+
+        model_name = config.MODEL_SIZE.split('/')[-1].replace('faster-whisper-', '')
+        logging.info(
+            f"Loading model: {model_name} on device: {config.DEVICE} "
+            f"with compute_type: {config.COMPUTE_TYPE}"
+        )
+        try:
+            model = WhisperModel(
+                model_name,
+                device=config.DEVICE,
+                compute_type=config.COMPUTE_TYPE,
+                cpu_threads=2,
+                num_workers=1,
+            )
+            logging.info("Model loaded and ready.")
+        except Exception as e:
+            logging.error(f"Failed to load Whisper model: {e}")
+            raise
+
+        yield  # Start application after successful initialization
+
+    finally:
+        # Cleanup code can be added here if needed
+        pass
+
+
+# Register the lifespan handler
+app = FastAPI(lifespan = app_lifespan)
 
 @app.get("/health")
-def health_check():
+def health_check(response: Response):
     """
     Checks if the application is healthy.
     """
+    if model is None:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "unhealthy", "reason": "STT model not initialized"}
     return {"status": "healthy"}
 
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    Loads the Whisper model into a global variable during application startup.
-    This is executed once when the FastAPI application starts.
-    """
-    global model
-    model_name = config.MODEL_SIZE.split('/')[-1].replace('faster-whisper-', '')
-
-    logging.info(
-        f"Loading model: {model_name} on device: {config.DEVICE} "
-        f"with compute_type: {config.COMPUTE_TYPE}"
-    )
-    try:
-        model = WhisperModel(
-            model_name,
-            device=config.DEVICE,
-            compute_type=config.COMPUTE_TYPE
-        )
-        logging.info("Model loaded and ready.")
-    except Exception as e:
-        logging.error(f"Failed to load Whisper model: {e}")
-        # Exit if the model fails to load, as the app is non-functional.
-        exit(1)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -54,18 +68,25 @@ async def websocket_endpoint(websocket: WebSocket):
     It accepts a connection, receives audio chunks, processes them,
     and sends back transcriptions.
     """
+    if not model:
+        logging.error("Rejecting connection: STT model not initialized.")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="Model Not Ready")
+        return
+
     await websocket.accept()
     logging.info("WebSocket connection established.")
 
-    last_processed_chunk = None
+    #last_processed_chunk = None
     try:
         while True:
             audio_chunk = await websocket.receive_bytes()
 
             # Basic debouncing to avoid processing the same chunk multiple times
-            if audio_chunk == last_processed_chunk:
-                continue
-            last_processed_chunk = audio_chunk
+            # ** Likely no longer needed! **
+            # if audio_chunk == last_processed_chunk:
+            #     continue
+            # last_processed_chunk = audio_chunk
 
             # Process the audio chunk using the globally loaded model
             transcription = await process_audio_chunk(model, audio_chunk)
@@ -81,9 +102,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
     except WebSocketDisconnect:
-        logging.info("WebSocket connection closed.")
+        logging.info("WebSocket connection closed cleanly by client.")
     except Exception as e:
         logging.error(f"An error occurred in the WebSocket handler: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
+        logging.info("WebSocket cleanup complete. Ready for new connections.")
 
 if __name__ == "__main__":
     """

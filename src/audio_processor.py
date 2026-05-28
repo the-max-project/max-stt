@@ -3,37 +3,30 @@ import logging
 import numpy as np
 from faster_whisper import WhisperModel
 
+MAX_CONCURRENT_TRANSCRIPTIONS = 2
+transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
+
+# Create a synchronous helper to handle the actual transcription
+def _sync_transcribe(model: WhisperModel, audio_np: np.ndarray) -> str:
+    segments, _ = model.transcribe(audio_np, vad_filter=True)
+
+    return "".join(segment.text for segment in segments).strip()
+
 
 async def process_audio_chunk(model: WhisperModel, audio_chunk: bytes) -> str:
-    """
-    Processes a single chunk of audio data with an assumed format of 32bit float pcm.
-
-    This function takes a raw audio chunk, creates a numpy array and then
-    transcribes it using the provided Whisper model instance.
-
-    Args:
-        model: The pre-loaded faster_whisper model.
-        audio_chunk: The binary audio data to process.
-
-    Returns:
-        A string containing the transcribed text, or an empty string on error.
-    """
     if not model:
         logging.error("Model is not loaded.")
         return ""
     try:
-
-        logging.info(f"Processing audio chunk len = {len(audio_chunk)}.")
+        logging.debug(f"Processing audio chunk len = {len(audio_chunk)}.")
         audio_np = np.frombuffer(audio_chunk, dtype=np.float32)
 
-        # Transcribe the audio using the Whisper model.
-        segments, _ = model.transcribe(audio_np, vad_filter=True)
-        transcription = ""
-        for segment in segments:
-            logging.debug(f"Segment: {segment}")
-            transcription += segment.text
+        # Offload the blocking CPU work to a separate thread
+        async with transcription_semaphore:
+            transcription = await asyncio.to_thread(_sync_transcribe, model, audio_np)
 
-        return transcription.strip()
+        logging.debug(f"Transcription: {transcription}")
+        return transcription
 
     except Exception as e:
         logging.error(f"Error in audio processing: {e}")
