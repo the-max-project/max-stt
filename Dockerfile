@@ -1,7 +1,9 @@
 # # This first line enables the BuildKit features like cache mounts.
 ARG PYTHON_VERSION=3.11
 #ARG BASE_IMAGE=nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
-ARG BASE_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+#ARG BASE_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# Set the default to the Mac-friendly image (overridden by .env for NVIDIA)
+ARG BASE_IMAGE=python:3.11-slim-bookworm
 ARG LOG_LEVEL=info
 
 # ---- Base Stage ----
@@ -16,9 +18,10 @@ RUN echo "The Python version is set to: python${PYTHON_VERSION}"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Remove as redundent with docker-compose.yaml
 # Set environment variables for default execution
-ENV DEVICE=cuda
-ENV COMPUTE_TYPE=float16
+#ENV DEVICE=cuda
+#ENV COMPUTE_TYPE=float16
 
 # Set the working directory
 WORKDIR /app
@@ -58,12 +61,29 @@ RUN python -m venv /opt/venv
 # Activate the virtual environment for subsequent RUN commands
 ENV PATH="/opt/venv/bin:$PATH"
 
+# 1. Conditionally install STT packages based on the hardware architecture
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        echo "🍎 Detected Apple Silicon (ARM64). Installing Mac-optimized STT tools..." && \
+        pip install mlx-whisper; \
+    elif [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
+        echo "🟩 Detected x86_64. Installing CUDA-optimized STT tools..." && \
+        pip install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cu124 && \
+        pip install faster-whisper; \
+    else \
+        echo "❌ Unsupported architecture: $ARCH" && exit 1; \
+    fi
+
 # Copy the requirements file
 COPY --chown=appuser:appuser requirements.txt .
 
-# # Use a cache mount to speed up pip installs across builds
+# 2. Install the rest of the generic application requirements
+#    Use a cache mount to speed up pip installs across builds
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
+
 
 # ---- Production Stage ----
 FROM base AS prod

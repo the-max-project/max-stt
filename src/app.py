@@ -2,15 +2,15 @@ import logging
 import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, status
-from faster_whisper import WhisperModel
 from . import config
-from .audio_processor import process_audio_chunk
+from .audio_processor import process_audio_chunk, get_model
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Global variable to hold the Whisper model instance
-model: WhisperModel | None = None
+model = None
+
 
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
@@ -22,19 +22,13 @@ async def app_lifespan(_app: FastAPI):
     try:
         logging.info("Initializing application...")
 
-        model_name = config.MODEL_SIZE.split('/')[-1].replace('faster-whisper-', '')
         logging.info(
-            f"Loading model: {model_name} on device: {config.DEVICE} "
+            f"Preparing model: {config.MODEL_SIZE} on device: {config.DEVICE} "
             f"with compute_type: {config.COMPUTE_TYPE}"
         )
         try:
-            model = WhisperModel(
-                model_name,
-                device=config.DEVICE,
-                compute_type=config.COMPUTE_TYPE,
-                cpu_threads=2,
-                num_workers=1,
-            )
+            # The processor now handles whether this returns a WhisperModel or an MLX string
+            model = get_model(config.MODEL_SIZE, config.DEVICE, config.COMPUTE_TYPE)
             logging.info("Model loaded and ready.")
         except Exception as e:
             logging.error(f"Failed to load Whisper model: {e}")

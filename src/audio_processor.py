@@ -1,20 +1,62 @@
 import asyncio
 import logging
 import numpy as np
-from faster_whisper import WhisperModel
 
 MAX_CONCURRENT_TRANSCRIPTIONS = 2
 transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
 
-# Create a synchronous helper to handle the actual transcription
-def _sync_transcribe(model: WhisperModel, audio_np: np.ndarray) -> str:
-    segments, _ = model.transcribe(audio_np, vad_filter=True)
+# --- DYNAMIC BACKEND DETECTION ---
+try:
+    import mlx_whisper
 
-    return "".join(segment.text for segment in segments).strip()
+    STT_BACKEND = "mlx"
+except ImportError:
+    from faster_whisper import WhisperModel
+
+    STT_BACKEND = "faster_whisper"
 
 
-async def process_audio_chunk(model: WhisperModel, audio_chunk: bytes) -> str:
-    if not model:
+def get_model(model_size: str, device: str, compute_type: str):
+    """Loads or prepares the model based on the active hardware backend."""
+    if STT_BACKEND == "mlx":
+        # MLX uses specific HuggingFace community repos for optimized Mac weights
+        mlx_models = {
+            "large-v3": "mlx-community/whisper-large-v3-mlx",
+            "large-v2": "mlx-community/whisper-large-v2-mlx",
+            "base": "mlx-community/whisper-base-mlx",
+            "tiny": "mlx-community/whisper-tiny-mlx",
+        }
+        repo_id = mlx_models.get(model_size, f"mlx-community/whisper-{model_size}-mlx")
+        logging.info(f"🍎 Using MLX backend. Mapped '{model_size}' to '{repo_id}'")
+        return repo_id  # MLX just needs the repo string for transcription
+
+    elif STT_BACKEND == "faster_whisper":
+        logging.info("🟩 Using faster_whisper CUDA backend.")
+        model_name = model_size.split('/')[-1].replace('faster-whisper-', '')
+        return WhisperModel(
+            model_name,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=2,
+            num_workers=1,
+        )
+
+
+def _sync_transcribe(model_instance, audio_np: np.ndarray) -> str:
+    """Executes the transcription based on the active backend."""
+    if STT_BACKEND == "mlx":
+        # MLX transcribe call (model_instance is the repo string)
+        result = mlx_whisper.transcribe(audio_np, path_or_hf_repo=model_instance)
+        return result.get("text", "").strip()
+
+    elif STT_BACKEND == "faster_whisper":
+        # Faster-Whisper transcribe call (model_instance is the WhisperModel object)
+        segments, _ = model_instance.transcribe(audio_np, vad_filter=True)
+        return "".join(segment.text for segment in segments).strip()
+
+
+async def process_audio_chunk(model_instance, audio_chunk: bytes) -> str:
+    if not model_instance:
         logging.error("Model is not loaded.")
         return ""
     try:
@@ -23,7 +65,7 @@ async def process_audio_chunk(model: WhisperModel, audio_chunk: bytes) -> str:
 
         # Offload the blocking CPU work to a separate thread
         async with transcription_semaphore:
-            transcription = await asyncio.to_thread(_sync_transcribe, model, audio_np)
+            transcription = await asyncio.to_thread(_sync_transcribe, model_instance, audio_np)
 
         logging.debug(f"Transcription: {transcription}")
         return transcription
