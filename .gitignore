@@ -1,3 +1,5 @@
 .venv
 .idea
 digest.txt
+.venv-native/
+src/__pycache__/

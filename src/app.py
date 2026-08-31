@@ -28,7 +28,13 @@ async def app_lifespan(_app: FastAPI):
         )
         try:
             # The processor now handles whether this returns a WhisperModel or an MLX string
-            model = get_model(config.MODEL_SIZE, config.DEVICE, config.COMPUTE_TYPE)
+            model = get_model(
+                config.MODEL_SIZE,
+                config.DEVICE,
+                config.COMPUTE_TYPE,
+                cpu_threads=config.CPU_THREADS,
+                num_workers=config.NUM_WORKERS,
+            )
             logging.info("Model loaded and ready.")
         except Exception as e:
             logging.error(f"Failed to load Whisper model: {e}")
