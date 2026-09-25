@@ -19,7 +19,8 @@ source .venv-native/bin/activate
 pip install -q --upgrade pip
 pip install -q -r requirements.txt mlx-whisper
 
-export MODEL_SIZE="${STT_MODEL_SIZE:-large-v3}"
+# export MODEL_SIZE="${STT_MODEL_SIZE:-large-v3}"
+export MODEL_SIZE="${STT_MODEL_SIZE:-small}"
 export DEVICE=mps          # unused by the mlx branch, kept for log clarity
 export COMPUTE_TYPE=native # unused by the mlx branch, kept for log clarity
 export UVICORN_HOST=0.0.0.0
